@@ -20,7 +20,7 @@ from src.deep_q_network import ActorCritic
 from tensorboardX import SummaryWriter
 #%%
 parser = argparse.ArgumentParser(description='PyTorch actor-critic example')
-parser.add_argument('--gamma', type=float, default=0.9, metavar='G',
+parser.add_argument('--gamma', type=float, default=0.99, metavar='G',
                     help='discount factor (default: 0.9)')
 parser.add_argument('--seed', type=int, default=543, metavar='N',
                     help='random seed (default: 543)')
@@ -33,6 +33,10 @@ parser.add_argument("--width", type=int, default=10, help="The common width for 
 parser.add_argument("--height", type=int, default=20, help="The common height for all images")
 parser.add_argument("--block_size", type=int, default=30, help="Size of a block")
 parser.add_argument("--log_path", type=str, default="tensorboard")
+parser.add_argument("--save_interval", type=int, default=1000)
+parser.add_argument("--replay_memory_size", type=int, default=30000,
+                     help="Number of epoches between testing phases")
+parser.add_argument("--saved_path", type=str, default="trained_models")
 args = parser.parse_args()
 #%%
 env = Tetris(width=args.width, height=args.height, block_size=args.block_size)
@@ -40,13 +44,15 @@ torch.cuda.manual_seed(123)
 SavedAction = namedtuple('SavedAction', ['log_prob', 'value'])
 #%%
 model = ActorCritic()
+# model = torch.load("{}/tetris_3000".format(args.saved_path))
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
 eps = np.finfo(np.float32).eps.item()
 writer = SummaryWriter(args.log_path)
 #%%
 def select_action(x):
-
-    probs, value = model(x.cuda())#reshape
+    if torch.cuda.is_available():
+        x = x.cuda()
+    probs, value = model(x)#reshape
     #print(probs, value)
 
     # create a categorical distribution over the list of probabilities of actions
@@ -71,15 +77,17 @@ def finish_episode():
     value_losses = [] # list to save critic (value) loss
     returns = [] # list to save the true values
     # print(len(model.rewards))
+    # print(model.rewards)
     # calculate the true value using rewards returned from the environment
     for r in model.rewards[::-1]:
-        
+        # print(r)
         # calculate the discounted value
         R = r + args.gamma * R
         returns.insert(0, R)
-
+    
     returns = torch.tensor(returns)
-    # print(returns)
+    
+    #print(returns)
     # returns = (returns - returns.mean()) / (returns.std() + eps)
     # print(returns)
     for (log_prob, value), R in zip(saved_actions, returns):
@@ -88,10 +96,12 @@ def finish_episode():
         # calculate actor (policy) loss 
         policy_losses.append(-log_prob * advantage)
         # print(value.data)
+        
         # print(R)
         # calculate critic (value) loss using L1 smooth loss
-        value_losses.append(F.smooth_l1_loss(value.data, R.clone().detach().requires_grad_(True).cuda()))
-
+        if torch.cuda.is_available():
+            value_losses.append(F.smooth_l1_loss(value.data, R.clone().detach().requires_grad_(True).cuda()))
+        value_losses.append(F.smooth_l1_loss(value.data, R.clone().detach().requires_grad_(True)))   
     # reset gradients
     optimizer.zero_grad()
 
@@ -108,7 +118,7 @@ def finish_episode():
 
 def main():
     running_reward = 10
-    last_score = 0
+
     # run inifinitely many episodes
     # for i_episode in count(1):
 
@@ -122,6 +132,10 @@ def main():
     # infinite loop while learning
     epoch = 0
     while epoch < args.num_epochs:
+        # if epoch > 2900:
+        #     RENDER = True
+        # else:
+        #     RENDER = False
         next_steps = env.get_next_states() #num of next_steps = 9, 17, 34
         # 從curr_piece當下的方塊推算可能有的動作數量(從num_rotate可知道此方塊可被旋轉幾次)，可能的STEPS數量都是9, 17, 34
         next_actions, next_states = zip(*next_steps.items())
@@ -137,18 +151,17 @@ def main():
         next_state = next_states[action_no, :]
         action = next_actions[action_no]
         # take the action
-        reward, done = env.step(action, render=True)
+        reward, done = env.step(action, render=False)
         # print(reward, done)
         # if args.render:
         #     env.render()
-
+       # print(reward)
         model.rewards.append(reward)
         ep_reward += reward
         if done:
             final_score = env.score
             final_tetrominoes = env.tetrominoes
             final_cleared_lines = env.cleared_lines
-            
             state = env.reset()
             if torch.cuda.is_available():
                 state = state.cuda()
@@ -158,10 +171,9 @@ def main():
         epoch += 1
         # update cumulative reward
         # running_reward = 0.05 * ep_reward + (1 - 0.05) * running_reward
-
+    
         # perform backprop
         finish_episode()
-
         print("Epoch: {}/{}, Action: {}, Score: {}, Tetrominoes {}, Cleared lines: {}".format(
             epoch,
             args.num_epochs,
@@ -172,6 +184,10 @@ def main():
         writer.add_scalar('Train/Score', final_score, epoch - 1)
         writer.add_scalar('Train/Tetrominoes', final_tetrominoes, epoch - 1)
         writer.add_scalar('Train/Cleared lines', final_cleared_lines, epoch - 1)
+        if epoch > 0 and epoch % args.save_interval == 0:
+            torch.save(model, "{}/tetris_{}".format(args.saved_path, epoch))
+
+    torch.save(model, "{}/tetris".format(args.saved_path))
         # log results
         # if i_episode % args.log_interval == 0:
         #     print('Episode {}\tLast reward: {:.2f}\tAverage reward: {:.2f}'.format(
@@ -188,4 +204,4 @@ if __name__ == '__main__':
     main()
 #%%
 
-torch.save(model, "tetris_fixreward")
+torch.save(model, "tetris_ac")
