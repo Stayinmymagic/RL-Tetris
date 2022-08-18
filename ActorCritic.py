@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
 from src.tetris import Tetris
-from src.deep_q_network import ActorCritic
+from src.CNN import ActorCritic
 from tensorboardX import SummaryWriter
 #%%
 parser = argparse.ArgumentParser(description='PyTorch actor-critic example')
